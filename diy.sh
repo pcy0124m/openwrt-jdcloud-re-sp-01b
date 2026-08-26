@@ -7,14 +7,16 @@
 echo "=== 开始执行 diy.sh ==="
 
 # 修复: 删除与当前内核不兼容的 UVC IP209 补丁（Lean 源码已知问题）
+# 实际文件名: 810-uvc-add-iPassion-IP209-support.patch（注意: 编号810不是818，含iPassion大写P）
 # 该补丁给京东云一代 USB 摄像头驱动打补丁，但内核更新后 hunk 失败导致编译中断
-echo "--- 查找 UVC IP209 补丁 ---"
-find . -name "*uvc*ip209*" -o -name "*818-uvc*" 2>/dev/null | while read f; do
-    echo "删除坏补丁: $f"
+echo "--- 查找并删除 UVC IP209 坏补丁 ---"
+# 方法1: 精确文件名（已知路径）
+rm -vf target/linux/ramips/patches-5.10/810-uvc-add-iPassion-IP209-support.patch 2>/dev/null || true
+# 方法2: 不区分大小写全局搜索兜底
+find target/linux -iname "*uvc*ip209*" -o -iname "*ipassion*uvc*" 2>/dev/null | while read f; do
+    echo "找到并删除: $f"
     rm -f "$f"
 done
-# 兜底：按已知精确路径再删一次
-rm -vf target/linux/ramips/patches-*/818-uvc-add-ip209-support.patch 2>/dev/null || true
 echo "--- UVC 补丁清理完成 ---"
 
 # 修改默认 IP (可选，默认 192.168.1.1)
