@@ -8,6 +8,10 @@ on:
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
+  # 锁定源码 commit（避免 rolling update 导致补丁不兼容）
+  # 此 commit 已被验证可成功编译 mt7621 (来源: Siha06/openwrt-xy R2026-04-16)
+  # 如需更新源码，修改此值或设为空字符串跟随 master
+  REPO_COMMIT: ecec1ef93a8920f30ef927d989b13b674d614ca6
   CONFIG_FILE: config/jdcloud-re-sp-01b.config
   DIY_SH: diy.sh
   FREE_UP_DISK: true
@@ -43,6 +47,11 @@ jobs:
       run: |
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
+        # 如果指定了 commit，锁定到该版本（避免 rolling update 导致补丁不兼容）
+        if [ -n "$REPO_COMMIT" ]; then
+          echo "锁定源码到 commit: $REPO_COMMIT"
+          git checkout "$REPO_COMMIT"
+        fi
         git submodule update --init --recursive
 
     - name: Apply patches
