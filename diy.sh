@@ -15,16 +15,12 @@ sed -i 's/OpenWrt/JDCloud/g' package/base-files/files/bin/config_generate
 # 修改时区为上海
 sed -i 's|Timezone.*|Timezone "Asia/Shanghai"|g' package/base-files/files/bin/config_generate
 
-# 添加 helloworld 插件源 (Passwall、OpenClaw 等)
+# 添加 helloworld 插件源 (包含 Passwall、OpenClash 等常用插件)
+# 注意: 不单独添加 passwall/passwall2 源，避免 feed 名称冲突导致构建失败
+# 如需 Passwall，通过 helloworld 源即可获取
 if [ ! -f "feeds.conf.default" ]; then
     cp feeds.conf.default feeds.conf
 fi
 grep -q "helloworld" feeds.conf || echo 'src-git helloworld https://github.com/fw876/helloworld' >> feeds.conf
-
-# 添加 passwall 插件源
-grep -q "passwall" feeds.conf || echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >> feeds.conf
-
-# 添加 passwall2 插件源
-grep -q "passwall2" feeds.conf || echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2' >> feeds.conf
 
 echo "=== diy.sh 执行完成 ==="
