@@ -6,6 +6,11 @@
 
 echo "=== 开始执行 diy.sh ==="
 
+# 修复: 删除与当前内核不兼容的 UVC IP209 补丁（Lean 源码已知问题）
+# 该补丁给京东云一代 USB 摄像头驱动打补丁，但内核更新后 hunk 失败导致编译中断
+rm -f target/linux/ramips/patches-5.10/818-uvc-add-ip209-support.patch 2>/dev/null || true
+echo "已移除不兼容的 UVC IP209 补丁"
+
 # 修改默认 IP (可选，默认 192.168.1.1)
 # sed -i 's/192.168.1.1/192.168.100.1/g' package/base-files/files/bin/config_generate
 
