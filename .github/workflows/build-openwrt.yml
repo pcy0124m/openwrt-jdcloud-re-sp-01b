@@ -84,22 +84,10 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        # 确保 host 工具 (po2lmo 等) 在 PATH 中
+        # 将 host 工具目录加入 PATH（po2lmo 等工具编译后会出现在这里）
         export PATH="$PATH:$PWD/staging_dir/host/bin"
-        echo "[INFO] 已添加 staging_dir/host/bin 到 PATH"
-        # 显式构建 po2lmo（default-settings 编译中文翻译需要，必须提前就绪）
-        echo "[INFO] 显式构建 po2lmo..."
-        make tools/compile -j$(nproc) V=s || make tools/compile -j1 V=s
-        make tools/install -j1 V=s
-        # 确认 po2lmo 可用
-        echo "[INFO] 检查 po2lmo..."
-        which po2lmo 2>/dev/null && echo "[OK] po2lmo 已就绪" || {
-            echo "[WARN] po2lmo 不在 PATH 中，搜索中..."
-            find $PWD -name "po2lmo" -type f 2>/dev/null | head -5
-            export PATH="$PATH:$(find $PWD/staging_dir/host/bin -type f -executable 2>/dev/null | xargs -I{} dirname {} | sort -u | tr '\n' ':' | sed 's/:$//')"
-            which po2lmo 2>/dev/null && echo "[OK] po2lmo 找到" || echo "[ERROR] po2lmo 仍未找到!"
-        }
-        echo "[INFO] 开始全量编译..."
+        # 直接编译（已通过 diy.sh 删除 .po 文件绕过 po2lmo 依赖）
+        # 并行编译加速；失败则单线程重试以便定位错误
         make -j$(nproc) || make -j1 V=s
         echo "status=$?" >> $GITHUB_OUTPUT
 

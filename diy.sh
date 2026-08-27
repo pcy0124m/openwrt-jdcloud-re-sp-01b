@@ -6,6 +6,13 @@
 
 echo "=== 开始执行 diy.sh ==="
 
+# 绕过 po2lmo 依赖问题：删除中文翻译 .po 文件
+# default-settings 编译 .po→.lmo 需要 po2lmo 工具，但该工具在并行编译时可能未就绪
+# 删除 .po 后跳过翻译编译，不影响路由器核心功能（后续可 opkg 安装语言包）
+echo "--- 移除 .po 翻译文件以绕过 po2lmo 依赖 ---"
+find package/lean -name "*.po" -type f -delete 2>/dev/null && echo "[OK] 已删除 lean 的 .po 文件" || echo "[INFO] 无 .po 文件"
+find package -name "*.po" -type f -path "*/default-settings/*" -delete 2>/dev/null || true
+
 # 强制禁用 libselinux (mt7621 编译失败, 路由器不需要 SELinux)
 # 物理删除源码目录, 彻底阻止编译 (config 里设 =n 无法对抗 kconfig 依赖链)
 echo "--- 禁用 libselinux ---"
