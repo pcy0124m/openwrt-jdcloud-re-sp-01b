@@ -87,10 +87,18 @@ jobs:
         # 确保 host 工具 (po2lmo 等) 在 PATH 中
         export PATH="$PATH:$PWD/staging_dir/host/bin"
         echo "[INFO] 已添加 staging_dir/host/bin 到 PATH"
-        # 先构建工具链和 host 工具（确保 po2lmo 等在主编译前就绪）
-        echo "[INFO] 预构建 tools/toolchain..."
-        make tools/install -j$(nproc) || make tools/install -j1 V=s
-        make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
+        # 显式构建 po2lmo（default-settings 编译中文翻译需要，必须提前就绪）
+        echo "[INFO] 显式构建 po2lmo..."
+        make tools/compile -j$(nproc) V=s || make tools/compile -j1 V=s
+        make tools/install -j1 V=s
+        # 确认 po2lmo 可用
+        echo "[INFO] 检查 po2lmo..."
+        which po2lmo 2>/dev/null && echo "[OK] po2lmo 已就绪" || {
+            echo "[WARN] po2lmo 不在 PATH 中，搜索中..."
+            find $PWD -name "po2lmo" -type f 2>/dev/null | head -5
+            export PATH="$PATH:$(find $PWD/staging_dir/host/bin -type f -executable 2>/dev/null | xargs -I{} dirname {} | sort -u | tr '\n' ':' | sed 's/:$//')"
+            which po2lmo 2>/dev/null && echo "[OK] po2lmo 找到" || echo "[ERROR] po2lmo 仍未找到!"
+        }
         echo "[INFO] 开始全量编译..."
         make -j$(nproc) || make -j1 V=s
         echo "status=$?" >> $GITHUB_OUTPUT
