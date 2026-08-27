@@ -84,6 +84,9 @@ jobs:
       id: compile
       run: |
         cd openwrt
+        # 确保 host 工具 (po2lmo 等) 在 PATH 中
+        export PATH="$PATH:$PWD/staging_dir/host/bin"
+        echo "[INFO] 已添加 staging_dir/host/bin 到 PATH"
         make -j$(nproc) || make -j1 V=s
         echo "status=$?" >> $GITHUB_OUTPUT
 
