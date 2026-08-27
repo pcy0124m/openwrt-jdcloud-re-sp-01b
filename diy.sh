@@ -6,6 +6,16 @@
 
 echo "=== 开始执行 diy.sh ==="
 
+# 强制禁用 libselinux (mt7621 编译失败, 路由器不需要 SELinux)
+# 物理删除源码目录, 彻底阻止编译 (config 里设 =n 无法对抗 kconfig 依赖链)
+echo "--- 禁用 libselinux ---"
+if [ -d "package/libs/libselinux" ]; then
+    rm -rf package/libs/libselinux
+    echo "[OK] 已删除 package/libs/libselinux"
+else
+    echo "[INFO] libselinux 目录不存在 (可能已被移除)"
+fi
+
 # 修复: 删除 Lean 源码中与当前内核不兼容的坏补丁（已知问题，内核更新后 hunk 失败）
 # 这些补丁是给京东云一代特定硬件（摄像头/红外遥控）打的，路由器用途不需要
 echo "--- 清理不兼容的内核补丁 ---"
