@@ -86,14 +86,30 @@ jobs:
         cd openwrt
         # 将 host 工具目录加入 PATH（po2lmo 等工具编译后会出现在这里）
         export PATH="$PATH:$PWD/staging_dir/host/bin"
-        # 直接编译（已通过 diy.sh 删除 .po 文件绕过 po2lmo 依赖）
-        # 捕获错误输出到文件，即使日志被截断也能通过 artifact 查看
         mkdir -p /tmp/build_logs
+        # === 两阶段编译 ===
+        # 阶段1: 单线程编译工具链 (确保 po2lmo/quilt 等 host 工具就绪)
+        echo "===== 阶段1: 编译工具链 (tools + toolchain) ====="
+        make tools/install -j$(nproc) 2>&1 | tee /tmp/build_logs/tools.log || {
+          echo "[ERROR] tools 编译失败" >> /tmp/build_logs/error.log
+          cat /tmp/build_logs/tools.log >> /tmp/build_logs/error.log
+          echo "status=1" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        make toolchain/install -j$(nproc) 2>&1 | tee /tmp/build_logs/toolchain.log || {
+          echo "[ERROR] toolchain 编译失败" >> /tmp/build_logs/error.log
+          cat /tmp/build_logs/toolchain.log >> /tmp/build_logs/error.log
+          echo "status=1" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        echo "===== 阶段1完成: 工具链就绪 ====="
+        # 阶段2: 并行编译全部目标 (固件)
+        echo "===== 阶段2: 并行编译固件 ====="
         make -j$(nproc) 2>&1 | tee /tmp/build_logs/parallel_build.log || {
           echo "=== 并行编译失败，切换到单线程详细模式 ===" >> /tmp/build_logs/error.log
           make -j1 V=s 2>&1 | tee /tmp/build_logs/verbose_build.log || true
           echo "status=1" >> $GITHUB_OUTPUT
-          exit 0  # 不让步骤立即失败，先上传错误日志
+          exit 0
         }
         echo "status=0" >> $GITHUB_OUTPUT
 
