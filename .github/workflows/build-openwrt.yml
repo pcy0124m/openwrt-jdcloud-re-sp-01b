@@ -16,6 +16,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -144,3 +146,29 @@ jobs:
       with:
         name: build-logs
         path: /tmp/build_logs/
+
+    - name: Prepare release files
+      id: prep
+      if: steps.image.outputs.has_firmware == 'yes'
+      run: |
+        mkdir -p release
+        cp -r openwrt/bin/targets/ramips/mt7621/* release/ 2>/dev/null || true
+        echo "=== 待发布文件 ===" && ls -lh release/
+        echo "firmware_count=$(ls release/ | wc -l)" >> $GITHUB_OUTPUT
+
+    - name: Create Release and Upload Firmware
+      uses: softprops/action-gh-release@v2
+      if: steps.image.outputs.has_firmware == 'yes' && steps.prep.outputs.firmware_count != '0'
+      with:
+        tag_name: jdcloud-re-sp-01b-${{ github.run_number }}
+        name: OpenWrt 京东云一代 RE-SP-01B #${{ github.run_number }}
+        files: release/*
+        body: |
+          ## JDCloud RE-SP-01B（京东云一代）OpenWrt 固件
+
+          - 源码：coolsnowwolf/lede @ `${{ env.REPO_COMMIT }}`
+          - 刷机：Breed 或官方 Uboot 上传 `*-sysupgrade.bin`
+          - 默认管理地址：`192.168.1.1` / `192.168.100.1`
+          - 用户名：`root`，密码：`password`
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
