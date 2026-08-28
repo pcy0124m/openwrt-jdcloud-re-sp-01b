@@ -6,12 +6,18 @@
 
 echo "=== 开始执行 diy.sh ==="
 
-# 绕过 po2lmo 依赖问题：删除中文翻译 .po 文件
-# default-settings 编译 .po→.lmo 需要 po2lmo 工具，但该工具在并行编译时可能未就绪
-# 删除 .po 后跳过翻译编译，不影响路由器核心功能（后续可 opkg 安装语言包）
-echo "--- 移除 .po 翻译文件以绕过 po2lmo 依赖 ---"
-find package/lean -name "*.po" -type f -delete 2>/dev/null && echo "[OK] 已删除 lean 的 .po 文件" || echo "[INFO] 无 .po 文件"
-find package -name "*.po" -type f -path "*/default-settings/*" -delete 2>/dev/null || true
+# 禁用 default-settings (Lean) - 该包编译始终失败(po2lmo依赖)
+# 改用 diy.sh 手动设置默认值(主机名/时区/主题)
+echo "--- 禁用 default-settings ---"
+if [ -d "package/lean/default-settings" ]; then
+    rm -rf package/lean/default-settings
+    echo "[OK] 已删除 package/lean/default-settings"
+else
+    echo "[INFO] default-settings 目录不存在"
+fi
+
+# 删除所有 .po 文件, 绕过 po2lmo 依赖
+find package/lean -name "*.po" -type f -delete 2>/dev/null || true
 
 # 强制禁用 libselinux (mt7621 编译失败, 路由器不需要 SELinux)
 # 物理删除源码目录, 彻底阻止编译 (config 里设 =n 无法对抗 kconfig 依赖链)
@@ -49,6 +55,16 @@ sed -i 's/OpenWrt/JDCloud/g' package/base-files/files/bin/config_generate
 
 # 修改时区为上海
 sed -i 's|Timezone.*|Timezone "Asia/Shanghai"|g' package/base-files/files/bin/config_generate
+
+# 设置默认 LuCI 主题为 Argon (替代 default-settings 的功能)
+mkdir -p package/base-files/files/etc/uci-defaults/
+cat > package/base-files/files/etc/uci-defaults/99-set-luci-theme << 'EOF'
+#!/bin/sh
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit luci
+exit 0
+EOF
+chmod +x package/base-files/files/etc/uci-defaults/99-set-luci-theme
 
 # 添加 helloworld 插件源 (包含 Passwall、OpenClash 等常用插件)
 # 注意: 不单独添加 passwall/passwall2 源，避免 feed 名称冲突导致构建失败
