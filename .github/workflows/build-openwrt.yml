@@ -58,6 +58,15 @@ jobs:
         cd openwrt
         cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
         make defconfig
+        # === 关键: defconfig 后强制设置根文件系统格式 ===
+        # 不设这些, make 不会生成 .bin 固件镜像 (只产出 .ipk 包)
+        echo "--- 强制启用固件镜像生成 ---"
+        ./scripts/config set TARGET_ROOTFS_SQUASHFS y
+        ./scripts/config set TARGET_ROOTFS_INITRAMFS y
+        ./scripts/config set TARGET_IMAGES_GZIP y
+        # 确认配置已写入
+        grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -10
+        make defconfig  # 再次解析依赖
 
     - name: Download package
       run: |
@@ -93,27 +102,33 @@ jobs:
           exit 0
         }
 
-    - name: Build Firmware Image
+    - name: Check Firmware
       id: image
       run: |
         cd openwrt
         mkdir -p /tmp/build_logs
         echo "===== 检查固件 ====="
         FIRMWARE=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null | grep -v packages | head -10)
-        if [ -z "$FIRMWARE" ]; then
-          echo "[WARN] 无固件! 执行 make image..."
-          make image -j1 V=s 2>&1 | tee /tmp/build_logs/image_build.log || true
-          FIRMWARE=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null | grep -v packages | head -10)
-        fi
         if [ -n "$FIRMWARE" ]; then
-          echo "[OK] 固件:"
+          echo "[OK] 固件已生成:"
           ls -lh $FIRMWARE
           echo "has_firmware=yes" >> $GITHUB_OUTPUT
         else
-          echo "[WARN] 仍无固件! 目录内容:"
-          find bin/targets/ -type f 2>/dev/null | head -30
-          du -sh bin/targets/*/ 2>/dev/null || true
-          echo "has_firmware=no" >> $GITHUB_OUTPUT
+          echo "[WARN] 无 .bin 固件! 尝试 make target/install..."
+          make target/install -j1 V=s 2>&1 | tee /tmp/build_logs/target_install.log || true
+          FIRMWARE=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null | grep -v packages | head -10)
+          if [ -n "$FIRMWARE" ]; then
+            echo "[OK] 固件已生成:"
+            ls -lh $FIRMWARE
+            echo "has_firmware=yes" >> $GITHUB_OUTPUT
+          else
+            echo "[ERROR] 仍无固件! 目录内容:"
+            find bin/targets/ -type f 2>/dev/null | head -30
+            du -sh bin/targets/*/ 2>/dev/null || true
+            echo "--- 当前 rootfs 配置 ---"
+            grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config 2>/dev/null || echo "(未找到)"
+            echo "has_firmware=no" >> $GITHUB_OUTPUT
+          fi
         fi
 
     - name: Upload build outputs (always)
