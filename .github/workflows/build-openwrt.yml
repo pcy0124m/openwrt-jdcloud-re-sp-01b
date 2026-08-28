@@ -53,6 +53,7 @@ jobs:
     - name: Clone helloworld feed (Argon theme)
       run: |
         cd openwrt
+        rm -rf package/feeds/helloworld
         git clone --depth 1 https://github.com/fw876/helloworld.git package/feeds/helloworld
         ./scripts/feeds install -d y -f -p helloworld
 
