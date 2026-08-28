@@ -2,23 +2,14 @@ name: Build OpenWrt for JDCloud RE-SP-01B
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: 0 16 * * *  # 北京时间每天 0:00 编译
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
-  # 锁定源码 commit（避免 rolling update 导致补丁不兼容）
-  # 此 commit 已被验证可成功编译 mt7621 (来源: Siha06/openwrt-xy R2026-04-16)
-  # 如需更新源码，修改此值或设为空字符串跟随 master
   REPO_COMMIT: ecec1ef93a8920f30ef927d989b13b674d614ca6
   CONFIG_FILE: config/jdcloud-re-sp-01b.config
   DIY_SH: diy.sh
-  FREE_UP_DISK: true
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
-  # 使用阿里云镜像加速下载（apt 走 Ubuntu 镜像，make download 走 OpenWrt 镜像）
   OPENWRT_MIRROR: https://mirrors.aliyun.com/openwrt
   DOWNLOAD_MIRROR: https://mirrors.aliyun.com/openwrt
 
@@ -34,20 +25,16 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 将 apt 源切换为阿里云镜像，加速依赖安装
         sudo sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list
         sudo sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list
-        # 安装编译依赖（GitHub Runner 已自带并启用 swap，不要自建 /swapfile，否则会报 Text file busy）
         sudo apt-get update
         sudo apt-get -y install ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz mkisofs nano python3 python3-pip python3-pexpect python3-yaml rsync sphinx-doc subversion swig texinfo uglifyjs upx-ucl unzip wget zlib1g-dev
-        # 清理磁盘空间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
 
     - name: Clone source code
       run: |
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
-        # 如果指定了 commit，锁定到该版本（避免 rolling update 导致补丁不兼容）
         if [ -n "$REPO_COMMIT" ]; then
           echo "锁定源码到 commit: $REPO_COMMIT"
           git checkout "$REPO_COMMIT"
@@ -73,7 +60,6 @@ jobs:
         make defconfig
 
     - name: Download package
-      id: package
       run: |
         cd openwrt
         make download -j8
@@ -86,78 +72,59 @@ jobs:
         cd openwrt
         export PATH="$PATH:$PWD/staging_dir/host/bin"
         mkdir -p /tmp/build_logs
-        # === 两阶段编译 ===
-        echo "===== 阶段1: 编译工具链 (tools + toolchain) ====="
+        # 阶段1: 编译工具链
+        echo "===== 阶段1: 编译工具链 ====="
         make tools/install -j$(nproc) 2>&1 | tee /tmp/build_logs/tools.log || {
           echo "[ERROR] tools 编译失败" >> /tmp/build_logs/error.log
-          cat /tmp/build_logs/tools.log >> /tmp/build_logs/error.log
           echo "status=1" >> $GITHUB_OUTPUT
           exit 0
         }
         make toolchain/install -j$(nproc) 2>&1 | tee /tmp/build_logs/toolchain.log || {
           echo "[ERROR] toolchain 编译失败" >> /tmp/build_logs/error.log
-          cat /tmp/build_logs/toolchain.log >> /tmp/build_logs/error.log
           echo "status=1" >> $GITHUB_OUTPUT
           exit 0
         }
-        echo "===== 阶段1完成: 工具链就绪 ====="
         # 阶段2: 并行编译全部目标
         echo "===== 阶段2: 并行编译 ====="
         make -j$(nproc) 2>&1 | tee /tmp/build_logs/parallel_build.log || {
-          echo "=== 并行编译失败，切换到单线程详细模式 ===" >> /tmp/build_logs/error.log
+          echo "[ERROR] 编译失败, 切换单线程..." >> /tmp/build_logs/error.log
           make -j1 V=s 2>&1 | tee /tmp/build_logs/verbose_build.log || true
           echo "status=1" >> $GITHUB_OUTPUT
           exit 0
         }
 
-    - name: Check & Build Firmware Image
-      id: check_image
+    - name: Build Firmware Image
+      id: image
       run: |
         cd openwrt
-        echo "===== 检查固件文件 ====="
-        echo "--- bin/targets/ 目录结构 ---"
-        find bin/targets/ -type f 2>/dev/null | head -50 || echo "[WARN] bin/targets/ 不存在或为空"
-        echo ""
-        echo "--- 搜索固件镜像 (.bin/.img/.sysupgrade) ---"
-        FIRMWARE=$(find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "packages/" | head -10)
+        mkdir -p /tmp/build_logs
+        echo "===== 检查固件 ====="
+        FIRMWARE=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null | grep -v packages | head -10)
         if [ -z "$FIRMWARE" ]; then
-          echo "[WARN] 未找到固件镜像! 尝试显式 make image..."
-          mkdir -p /tmp/build_logs
-          make image -j1 V=s 2>&1 | tee /tmp/build_logs/image_build.log || {
-            echo "[ERROR] make image 也失败!" >> /tmp/build_logs/error.log
-            echo "image_status=failed" >> $GITHUB_OUTPUT
-            # 再次列出目录供诊断
-            echo "--- 最终 bin/targets/ 内容 ---"
-            find bin/targets/ -type f 2>/dev/null | head -30
-            exit 0
-          }
-          # make image 成功后再次检查
-          FIRMWARE=$(find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "packages/" | head -10)
-          if [ -n "$FIRMWARE" ]; then
-            echo "[OK] 固件已生成:"
-            echo "$FIRMWARE"
-            echo "image_status=ok" >> $GITHUB_OUTPUT
-          else
-            echo "[WARN] make image 返回成功但仍无固件文件"
-            find bin/targets/ -type f 2>/dev/null | head -20
-            echo "image_status=empty" >> $GITHUB_OUTPUT
-          fi
+          echo "[WARN] 无固件! 执行 make image..."
+          make image -j1 V=s 2>&1 | tee /tmp/build_logs/image_build.log || true
+          FIRMWARE=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null | grep -v packages | head -10)
+        fi
+        if [ -n "$FIRMWARE" ]; then
+          echo "[OK] 固件:"
+          ls -lh $FIRMWARE
+          echo "has_firmware=yes" >> $GITHUB_OUTPUT
         else
-          echo "[OK] 找到固件:"
-          echo "$FIRMWARE"
-          echo "image_status=ok" >> $GITHUB_OUTPUT
+          echo "[WARN] 仍无固件! 目录内容:"
+          find bin/targets/ -type f 2>/dev/null | head -30
+          du -sh bin/targets/*/ 2>/dev/null || true
+          echo "has_firmware=no" >> $GITHUB_OUTPUT
         fi
 
-    - name: Upload error logs (if failed)
+    - name: Upload build outputs (always)
       uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == '1' || steps.check_image.outputs.image_status == 'failed'
-      with:
-        name: build-error-logs
-        path: /tmp/build_logs/
-
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      if: steps.check_image.outputs.image_status == 'ok'
       with:
         name: openwrt-jdcloud-re-sp-01b
         path: openwrt/bin/targets/
+
+    - name: Upload logs (always)
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-logs
+        path: /tmp/build_logs/
