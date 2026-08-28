@@ -84,11 +84,9 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        # 将 host 工具目录加入 PATH（po2lmo 等工具编译后会出现在这里）
         export PATH="$PATH:$PWD/staging_dir/host/bin"
         mkdir -p /tmp/build_logs
         # === 两阶段编译 ===
-        # 阶段1: 单线程编译工具链 (确保 po2lmo/quilt 等 host 工具就绪)
         echo "===== 阶段1: 编译工具链 (tools + toolchain) ====="
         make tools/install -j$(nproc) 2>&1 | tee /tmp/build_logs/tools.log || {
           echo "[ERROR] tools 编译失败" >> /tmp/build_logs/error.log
@@ -103,26 +101,63 @@ jobs:
           exit 0
         }
         echo "===== 阶段1完成: 工具链就绪 ====="
-        # 阶段2: 并行编译全部目标 (固件)
-        echo "===== 阶段2: 并行编译固件 ====="
+        # 阶段2: 并行编译全部目标
+        echo "===== 阶段2: 并行编译 ====="
         make -j$(nproc) 2>&1 | tee /tmp/build_logs/parallel_build.log || {
           echo "=== 并行编译失败，切换到单线程详细模式 ===" >> /tmp/build_logs/error.log
           make -j1 V=s 2>&1 | tee /tmp/build_logs/verbose_build.log || true
           echo "status=1" >> $GITHUB_OUTPUT
           exit 0
         }
-        echo "status=0" >> $GITHUB_OUTPUT
+
+    - name: Check & Build Firmware Image
+      id: check_image
+      run: |
+        cd openwrt
+        echo "===== 检查固件文件 ====="
+        echo "--- bin/targets/ 目录结构 ---"
+        find bin/targets/ -type f 2>/dev/null | head -50 || echo "[WARN] bin/targets/ 不存在或为空"
+        echo ""
+        echo "--- 搜索固件镜像 (.bin/.img/.sysupgrade) ---"
+        FIRMWARE=$(find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "packages/" | head -10)
+        if [ -z "$FIRMWARE" ]; then
+          echo "[WARN] 未找到固件镜像! 尝试显式 make image..."
+          mkdir -p /tmp/build_logs
+          make image -j1 V=s 2>&1 | tee /tmp/build_logs/image_build.log || {
+            echo "[ERROR] make image 也失败!" >> /tmp/build_logs/error.log
+            echo "image_status=failed" >> $GITHUB_OUTPUT
+            # 再次列出目录供诊断
+            echo "--- 最终 bin/targets/ 内容 ---"
+            find bin/targets/ -type f 2>/dev/null | head -30
+            exit 0
+          }
+          # make image 成功后再次检查
+          FIRMWARE=$(find bin/targets/ -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "packages/" | head -10)
+          if [ -n "$FIRMWARE" ]; then
+            echo "[OK] 固件已生成:"
+            echo "$FIRMWARE"
+            echo "image_status=ok" >> $GITHUB_OUTPUT
+          else
+            echo "[WARN] make image 返回成功但仍无固件文件"
+            find bin/targets/ -type f 2>/dev/null | head -20
+            echo "image_status=empty" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "[OK] 找到固件:"
+          echo "$FIRMWARE"
+          echo "image_status=ok" >> $GITHUB_OUTPUT
+        fi
 
     - name: Upload error logs (if failed)
       uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == '1'
+      if: steps.compile.outputs.status == '1' || steps.check_image.outputs.image_status == 'failed'
       with:
         name: build-error-logs
         path: /tmp/build_logs/
 
     - name: Upload firmware
       uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == '0'
+      if: steps.check_image.outputs.image_status == 'ok'
       with:
         name: openwrt-jdcloud-re-sp-01b
         path: openwrt/bin/targets/
