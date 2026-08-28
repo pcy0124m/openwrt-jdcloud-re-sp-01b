@@ -60,10 +60,11 @@ jobs:
         make defconfig
         # === 关键: defconfig 后强制设置根文件系统格式 ===
         # 不设这些, make 不会生成 .bin 固件镜像 (只产出 .ipk 包)
+        # 用 sed 直接改 .config (scripts/config 是目录, 不能当命令用)
         echo "--- 强制启用固件镜像生成 ---"
-        ./scripts/config set TARGET_ROOTFS_SQUASHFS y
-        ./scripts/config set TARGET_ROOTFS_INITRAMFS y
-        ./scripts/config set TARGET_IMAGES_GZIP y
+        sed -i 's/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/CONFIG_TARGET_ROOTFS_SQUASHFS=y/' .config
+        sed -i 's/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/CONFIG_TARGET_ROOTFS_INITRAMFS=y/' .config
+        sed -i 's/# CONFIG_TARGET_IMAGES_GZIP is not set/CONFIG_TARGET_IMAGES_GZIP=y/' .config
         # 确认配置已写入
         grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -10
         make defconfig  # 再次解析依赖
