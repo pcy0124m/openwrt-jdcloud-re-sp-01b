@@ -2,29 +2,21 @@ name: Build OpenWrt for JDCloud RE-SP-01B
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: 0 16 * * *  # 北京时间每天 0:00 编译
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
-  # 锁定源码 commit（避免 rolling update 导致补丁不兼容）
-  # 此 commit 已被验证可成功编译 mt7621 (来源: Siha06/openwrt-xy R2026-04-16)
-  # 如需更新源码，修改此值或设为空字符串跟随 master
-  REPO_COMMIT: ecec1ef93a8920f30ef927d989b13b674d614ca6
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: v25.12.2
   CONFIG_FILE: config/jdcloud-re-sp-01b.config
   DIY_SH: diy.sh
-  FREE_UP_DISK: true
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
-  # 使用阿里云镜像加速下载（apt 走 Ubuntu 镜像，make download 走 OpenWrt 镜像）
   OPENWRT_MIRROR: https://mirrors.aliyun.com/openwrt
   DOWNLOAD_MIRROR: https://mirrors.aliyun.com/openwrt
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -34,24 +26,16 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 将 apt 源切换为阿里云镜像，加速依赖安装
         sudo sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list
         sudo sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list
-        # 安装编译依赖（GitHub Runner 已自带并启用 swap，不要自建 /swapfile，否则会报 Text file busy）
         sudo apt-get update
         sudo apt-get -y install ack antlr3 asciidoc autoconf automake autopoint bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz mkisofs nano python3 python3-pip python3-pexpect python3-yaml rsync sphinx-doc subversion swig texinfo uglifyjs upx-ucl unzip wget zlib1g-dev
-        # 清理磁盘空间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
 
     - name: Clone source code
       run: |
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
-        # 如果指定了 commit，锁定到该版本（避免 rolling update 导致补丁不兼容）
-        if [ -n "$REPO_COMMIT" ]; then
-          echo "锁定源码到 commit: $REPO_COMMIT"
-          git checkout "$REPO_COMMIT"
-        fi
         git submodule update --init --recursive
 
     - name: Apply patches
@@ -66,14 +50,29 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: Clone helloworld feed (Argon theme)
+      run: |
+        cd openwrt
+        git clone --depth 1 https://github.com/fw876/helloworld.git package/feeds/helloworld
+        ./scripts/feeds install -d y -f -p helloworld
+
     - name: Apply config
       run: |
         cd openwrt
         cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
         make defconfig
+        # === 关键: defconfig 后强制设置根文件系统格式 ===
+        # 不设这些, make 不会生成 .bin 固件镜像 (只产出 .ipk 包)
+        # 用 sed 直接改 .config (scripts/config 是目录, 不能当命令用)
+        echo "--- 强制启用固件镜像生成 ---"
+        sed -i 's/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/CONFIG_TARGET_ROOTFS_SQUASHFS=y/' .config
+        sed -i 's/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/CONFIG_TARGET_ROOTFS_INITRAMFS=y/' .config
+        sed -i 's/# CONFIG_TARGET_IMAGES_GZIP is not set/CONFIG_TARGET_IMAGES_GZIP=y/' .config
+        # 确认配置已写入
+        grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -10
+        make defconfig  # 再次解析依赖
 
     - name: Download package
-      id: package
       run: |
         cd openwrt
         make download -j8
@@ -84,29 +83,106 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        # 将 host 工具目录加入 PATH（po2lmo 等工具编译后会出现在这里）
         export PATH="$PATH:$PWD/staging_dir/host/bin"
-        # 直接编译（已通过 diy.sh 删除 .po 文件绕过 po2lmo 依赖）
-        # 捕获错误输出到文件，即使日志被截断也能通过 artifact 查看
         mkdir -p /tmp/build_logs
+        # 阶段1: 编译工具链
+        echo "===== 阶段1: 编译工具链 ====="
+        make tools/install -j$(nproc) 2>&1 | tee /tmp/build_logs/tools.log || {
+          echo "[ERROR] tools 编译失败" >> /tmp/build_logs/error.log
+          echo "status=1" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        make toolchain/install -j$(nproc) 2>&1 | tee /tmp/build_logs/toolchain.log || {
+          echo "[ERROR] toolchain 编译失败" >> /tmp/build_logs/error.log
+          echo "status=1" >> $GITHUB_OUTPUT
+          exit 0
+        }
+        # 阶段2: 并行编译全部目标
+        echo "===== 阶段2: 并行编译 ====="
         make -j$(nproc) 2>&1 | tee /tmp/build_logs/parallel_build.log || {
-          echo "=== 并行编译失败，切换到单线程详细模式 ===" >> /tmp/build_logs/error.log
+          echo "[ERROR] 编译失败, 切换单线程..." >> /tmp/build_logs/error.log
           make -j1 V=s 2>&1 | tee /tmp/build_logs/verbose_build.log || true
           echo "status=1" >> $GITHUB_OUTPUT
-          exit 0  # 不让步骤立即失败，先上传错误日志
+          exit 0
         }
-        echo "status=0" >> $GITHUB_OUTPUT
+        # 阶段3: 强制生成固件镜像（关键！）
+        echo "===== 阶段3: 强制生成固件镜像 ====="
+        make target/install -j$(nproc) 2>&1 | tee /tmp/build_logs/target_install.log || {
+          echo "[WARN] target/install 失败，尝试单线程..."
+          make target/install -j1 V=s 2>&1 | tee /tmp/build_logs/target_install_verbose.log || true
+        }
 
-    - name: Upload error logs (if failed)
-      uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == '1'
-      with:
-        name: build-error-logs
-        path: /tmp/build_logs/
+    - name: Check Firmware
+      id: image
+      run: |
+        cd openwrt
+        mkdir -p /tmp/build_logs
+        echo "===== 检查固件 ====="
+        echo "--- bin/targets 目录结构 ---"
+        find bin/targets/ -type f 2>/dev/null | head -30
+        echo ""
+        echo "--- bin/targets 各子目录大小 ---"
+        du -sh bin/targets/*/ 2>/dev/null || true
+        echo ""
+        FIRMWARE=$(find bin/targets/ -type f -name "*sysupgrade*.bin" -o -name "*squashfs*.bin" 2>/dev/null | head -10)
+        if [ -n "$FIRMWARE" ]; then
+          echo "[OK] 固件已生成:"
+          ls -lh $FIRMWARE
+          echo "has_firmware=yes" >> $GITHUB_OUTPUT
+          # 记录固件路径供后续使用
+          echo "$FIRMWARE" > /tmp/firmware_list.txt
+        else
+          # 尝试找任何 .bin 文件
+          ALL_BIN=$(find bin/targets/ -type f -name "*.bin" 2>/dev/null)
+          if [ -n "$ALL_BIN" ]; then
+            echo "[OK] 找到 .bin 文件:"
+            ls -lh $ALL_BIN
+            echo "has_firmware=yes" >> $GITHUB_OUTPUT
+            echo "$ALL_BIN" > /tmp/firmware_list.txt
+          else
+            echo "[ERROR] 无任何 .bin 固件!"
+            echo "--- 当前 rootfs 配置 ---"
+            grep -E "TARGET_ROOTFS|TARGET_IMAGES|CONFIG_PACKAGE_uhttpd|CONFIG_PACKAGE_luci" .config 2>/dev/null || echo "(未找到)"
+            echo "has_firmware=no" >> $GITHUB_OUTPUT
+          fi
+        fi
 
-    - name: Upload firmware
+    - name: Upload build outputs (always)
       uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == '0'
       with:
         name: openwrt-jdcloud-re-sp-01b
         path: openwrt/bin/targets/
+
+    - name: Upload logs (always)
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-logs
+        path: /tmp/build_logs/
+
+    - name: Prepare release files
+      id: prep
+      if: steps.image.outputs.has_firmware == 'yes'
+      run: |
+        mkdir -p release
+        cp -r openwrt/bin/targets/ramips/mt7621/* release/ 2>/dev/null || true
+        echo "=== 待发布文件 ===" && ls -lh release/
+        echo "firmware_count=$(ls release/ | wc -l)" >> $GITHUB_OUTPUT
+
+    - name: Create Release and Upload Firmware
+      uses: softprops/action-gh-release@v2
+      if: steps.image.outputs.has_firmware == 'yes' && steps.prep.outputs.firmware_count != '0'
+      with:
+        tag_name: jdcloud-re-sp-01b-${{ github.run_number }}
+        name: OpenWrt 京东云一代 RE-SP-01B #${{ github.run_number }}
+        files: release/*
+        body: |
+          ## JDCloud RE-SP-01B（京东云一代）OpenWrt 固件
+
+          - 源码：openwrt/openwrt v25.12.2
+          - 刷机：通过 Breed 上传 `*-squashfs-sysupgrade.bin`
+          - 默认管理地址：`192.168.12.1`
+          - 用户名：`root`，密码：`pcy831121`
+          - 主题：Argon（蓝色现代化界面）
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
