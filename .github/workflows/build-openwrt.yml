@@ -47,15 +47,18 @@ jobs:
     - name: Download feeds
       run: |
         cd openwrt
+        # 关键修复：CI 直连 git.openwrt.org 不稳定导致 luci/packages feed
+        # 静默更新失败 → 固件缺 LuCI 网页界面。改用 GitHub 官方镜像。
+        sed -i 's#https://git.openwrt.org/feed/#https://github.com/openwrt/#g; s#https://git.openwrt.org/project/#https://github.com/openwrt/#g' feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
-    - name: Clone helloworld feed (Argon theme)
-      run: |
-        cd openwrt
-        rm -rf package/feeds/helloworld
-        git clone --depth 1 https://github.com/fw876/helloworld.git package/feeds/helloworld
-        ./scripts/feeds install -d y -f -p helloworld
+        # 校验 luci feed 真正安装到位（luci-base 是 LuCI 核心，缺它即无管理界面）
+        if [ ! -d package/feeds/luci/luci-base ]; then
+          echo "::error::luci feed 未安装！无法生成带 Web 界面的固件"
+          ls -la package/feeds/ 2>/dev/null || true
+          exit 1
+        fi
+        echo "luci feed 安装确认: OK"
 
     - name: Apply config
       run: |
@@ -112,13 +115,19 @@ jobs:
         # === 中文语言包 ===
         CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
         CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
-        # === helloworld feed 插件（Passwall 等）===
-        CONFIG_PACKAGE_luci-app-passwall=y
         EXTRAS
 
         # Step 4: 再次 defconfig 解析新增包的依赖
         echo "=== Step 4: make defconfig（解析自定义包依赖）==="
         make defconfig
+
+        # 关键校验：defconfig 后 LuCI 必须仍为选中，否则生成残缺固件
+        if ! grep -q "^CONFIG_PACKAGE_luci=y" .config; then
+          echo "::error::defconfig 后 luci 被取消！Web 界面将缺失，终止构建"
+          grep -E "CONFIG_PACKAGE_luci" .config | head
+          exit 1
+        fi
+        echo "LuCI 选中确认: OK"
 
         # Step 5: 强制启用固件镜像生成
         echo "=== Step 5: 强制启用固件镜像 ==="
