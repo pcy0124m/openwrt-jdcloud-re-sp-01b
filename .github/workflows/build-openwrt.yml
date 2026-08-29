@@ -60,6 +60,18 @@ jobs:
         fi
         echo "luci feed 安装确认: OK"
 
+        # 添加 Argon 主题（第三方蓝色现代化界面，jerrykuku 维护，兼容 luci 2.x / OpenWrt 24.10+）
+        rm -rf package/luci-theme-argon
+        git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
+        if [ ! -f package/luci-theme-argon/Makefile ]; then
+          echo "::warning::Argon 主题源码未克隆成功，本次将使用默认 bootstrap 主题"
+        else
+          echo "Argon 主题源码确认: OK"
+        fi
+        # 调试：打印 feeds/luci 中实际可用的中文(zh)语言包，便于确认 25.12 真实包名
+        echo "=== feeds/luci 中的 i18n/zh 包 ==="
+        ls package/feeds/luci/ 2>/dev/null | grep -iE "i18n.*zh|zh.*i18n" || echo "(无匹配 zh 包)"
+
     - name: Apply config
       run: |
         cd openwrt
@@ -117,6 +129,21 @@ jobs:
         CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
         EXTRAS
 
+        # 自动探测并启用所有中文(zh)语言包 —— OpenWrt 25.12 的 luci 26.x 包名可能与旧版不同，
+        # 用 glob 动态发现 package/feeds/luci/luci-i18n-*-zh* 并强制启用，避免写死的包名失效
+        echo "=== 探测并启用中文(zh)语言包 ==="
+        ZH_FOUND=0
+        for d in package/feeds/luci/luci-i18n-*-zh* ; do
+          [ -d "$d" ] || continue
+          p=$(basename "$d")
+          echo "CONFIG_PACKAGE_${p}=y" >> .config
+          echo "  启用中文包: $p"
+          ZH_FOUND=1
+        done
+        if [ "$ZH_FOUND" = "0" ]; then
+          echo "::warning::未找到任何 zh 语言包目录，界面可能仍为英文"
+        fi
+
         # Step 4: 再次 defconfig 解析新增包的依赖
         echo "=== Step 4: make defconfig（解析自定义包依赖）==="
         make defconfig
@@ -128,12 +155,27 @@ jobs:
           exit 1
         fi
         echo "LuCI 选中确认: OK"
+        # 中文语言包与 Argon 主题确认（warning 级，不阻断构建）
+        if grep -qiE "^CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" .config; then
+          echo "中文语言包 选中确认: OK"
+        else
+          echo "::warning::中文语言包未被选中（界面可能为英文），请检查 i18n 包名"
+        fi
+        if grep -qiE "^CONFIG_PACKAGE_luci-theme-argon=y" .config; then
+          echo "Argon 主题 选中确认: OK"
+        else
+          echo "::warning::Argon 主题未被选中，将使用默认 bootstrap 主题"
+        fi
 
         # Step 5: 强制启用固件镜像生成
         echo "=== Step 5: 强制启用固件镜像 ==="
         sed -i 's/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/CONFIG_TARGET_ROOTFS_SQUASHFS=y/' .config
         sed -i 's/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/CONFIG_TARGET_ROOTFS_INITRAMFS=y/' .config
         sed -i 's/# CONFIG_TARGET_IMAGES_GZIP is not set/CONFIG_TARGET_IMAGES_GZIP=y/' .config
+        # 强制锁定中文语言包与 Argon 主题（覆盖 defconfig 可能误取消的情况）
+        sed -i 's/^# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config
+        sed -i 's/^# CONFIG_PACKAGE_luci-i18n-firewall-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y/' .config
+        sed -i 's/^# CONFIG_PACKAGE_luci-theme-argon is not set/CONFIG_PACKAGE_luci-theme-argon=y/' .config
         make defconfig
 
         # 最终确认关键包已启用
