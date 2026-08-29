@@ -60,18 +60,51 @@ jobs:
     - name: Apply config
       run: |
         cd openwrt
-        cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+        # === 策略变更：基于官方默认配置叠加（不再用手写完整 config）===
+        # 官方默认 config 已包含完整的 uhttpd+luci-ssl Web 栈
+        # 我们只在此基础上加自定义包（Argon 主题等）
+
+        # Step 1: 创建最小 config（只设目标设备）
+        cat > .config << 'MINICONFIG'
+        CONFIG_TARGET_ramips=y
+        CONFIG_TARGET_ramips_mt7621=y
+        CONFIG_TARGET_ramips_mt7621_DEVICE_jdcloud_re-sp-01b=y
+        MINICONFIG
+
+        # Step 2: defconfig → 生成官方完整默认配置（含 uhttpd+luci 全套）
+        echo "=== Step 2: make defconfig（官方默认配置）==="
         make defconfig
-        # === 关键: defconfig 后强制设置根文件系统格式 ===
-        # 不设这些, make 不会生成 .bin 固件镜像 (只产出 .ipk 包)
-        # 用 sed 直接改 .config (scripts/config 是目录, 不能当命令用)
-        echo "--- 强制启用固件镜像生成 ---"
+        echo "--- 默认配置中 uhttpd/luci 状态 ---"
+        grep -E "CONFIG_PACKAGE_uhttpd|CONFIG_PACKAGE_luci-ssl|CONFIG_PACKAGE_luci-base|CONFIG_PACKAGE_luci-mod-admin" .config | head -10
+
+        # Step 3: 追加我们需要的额外包（Argon 主题、中文等）
+        echo "=== Step 3: 追加自定义包 ==="
+        cat >> .config << 'EXTRAS'
+        # 自定义主题
+        CONFIG_PACKAGE_luci-theme-argon=y
+        # 中文语言包
+        CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+        # helloworld feed 的常用插件（Passwall 等）
+        CONFIG_PACKAGE_luci-app-passwall=y
+        EXTRAS
+
+        # Step 4: 再次 defconfig 解析新增包的依赖
+        echo "=== Step 4: make defconfig（解析自定义包依赖）==="
+        make defconfig
+
+        # Step 5: 强制启用固件镜像生成
+        echo "=== Step 5: 强制启用固件镜像 ==="
         sed -i 's/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/CONFIG_TARGET_ROOTFS_SQUASHFS=y/' .config
         sed -i 's/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/CONFIG_TARGET_ROOTFS_INITRAMFS=y/' .config
         sed -i 's/# CONFIG_TARGET_IMAGES_GZIP is not set/CONFIG_TARGET_IMAGES_GZIP=y/' .config
-        # 确认配置已写入
-        grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -10
-        make defconfig  # 再次解析依赖
+        make defconfig
+
+        # 最终确认关键包已启用
+        echo "=== 最终配置确认 ==="
+        grep -E "CONFIG_PACKAGE_uhttpd|CONFIG_PACKAGE_luci-ssl|CONFIG_PACKAGE_luci-base|CONFIG_PACKAGE_luci-mod-admin|CONFIG_PACKAGE_luci-theme-argon|CONFIG_PACKAGE_rpcd" .config | head -15
+        echo "--- rootfs 配置 ---"
+        grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -5
 
     - name: Download package
       run: |
