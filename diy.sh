@@ -50,12 +50,10 @@ sed -i 's/OpenWrt/JDCloud/g' package/base-files/files/bin/config_generate
 # 修改时区为上海
 sed -i 's|Timezone.*|Timezone "Asia/Shanghai"|g' package/base-files/files/bin/config_generate
 
-# 添加 helloworld 插件源 (包含 Passwall、OpenClash 等常用插件)
-# 注意: 不单独添加 passwall/passwall2 源，避免 feed 名称冲突导致构建失败
-# 如需 Passwall，通过 helloworld 源即可获取
-if [ ! -f "feeds.conf.default" ]; then
-    cp feeds.conf.default feeds.conf
-fi
-grep -q "helloworld" feeds.conf || echo 'src-git helloworld https://github.com/fw876/helloworld' >> feeds.conf
+# 注意：千万不要在此创建/追加 feeds.conf！
+# 历史上误写了「若 feeds.conf.default 不存在则 cp 成 feeds.conf」的反向判断，
+# 结果 >> 新建了一个只含 helloworld 的 feeds.conf，使 scripts/feeds 优先读取它，
+# 而忽略官方 feeds.conf.default 里的 luci/packages 等核心 feed ——
+# 导致连续多个版本固件全部缺失 LuCI 管理界面。核心 feed 一律由 feeds.conf.default 提供。
 
 echo "=== diy.sh 执行完成 ==="
