@@ -50,7 +50,7 @@ jobs:
         # 关键修复：CI 直连 git.openwrt.org 不稳定导致 luci/packages feed
         # 静默更新失败 → 固件缺 LuCI 网页界面。改用 GitHub 官方镜像。
         sed -i 's#https://git.openwrt.org/feed/#https://github.com/openwrt/#g; s#https://git.openwrt.org/project/#https://github.com/openwrt/#g' feeds.conf.default
-        # （测试版 #52：单独验证 Argon 主题能否启动，暂不添加 iStore 源）
+        # （测试版 #54：单独验证中文语言包能否启动，暂不添加 iStore 源 / 不含 Argon）
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         # 校验 luci feed 真正安装到位（luci-base 是 LuCI 核心，缺它即无管理界面）
@@ -122,10 +122,15 @@ jobs:
         CONFIG_PACKAGE_liblucihttp=y
         CONFIG_PACKAGE_liblucihttp-ucode=y
         CONFIG_PACKAGE_px5g-mbedtls=y
-        # === 自定义主题 ===
+        # === 自定义主题（本测试版仅验证中文，不含 Argon，使用默认 bootstrap）===
         CONFIG_PACKAGE_luci-theme-bootstrap=y
-        CONFIG_PACKAGE_luci-theme-argon=y
-        # === 测试版 #52：仅 Argon 主题，不加中文 / 不加 iStore（隔离变量验证主题兼容性）===
+        # === 中文语言包（OpenWrt 25.12 / luci 26.x）===
+        # 关键：中文语言总开关是 CONFIG_LUCI_LANG_zh_Hans（父），luci-i18n-* 子包 depends on 它。
+        # 只设子包 defconfig 会级联丢弃，必须同时设父开关。
+        CONFIG_LUCI_LANG_zh_Hans=y
+        CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y
+        CONFIG_PACKAGE_luci-i18n-firewall-zh_Hans=y
+        # === 测试版 #54：仅中文（隔离 Argon），验证中文语言包是否导致启动失败 ===
         EXTRAS
 
         # Step 4: 再次 defconfig 解析新增包的依赖
@@ -139,11 +144,14 @@ jobs:
           exit 1
         fi
         echo "LuCI 选中确认: OK"
-        # 测试版 #52：仅验证 Argon 主题选中（中文/iStore 已移除，不再确认）
-        if grep -qiE "^CONFIG_PACKAGE_luci-theme-argon=y" .config; then
-          echo "Argon 主题 选中确认: OK"
+        # 测试版 #54：验证中文语言包选中（核心需求，fail-fast：包名若仍不对立即报错）
+        if grep -qiE "^CONFIG_LUCI_LANG_zh_Hans=y" .config; then
+          echo "中文语言包 选中确认: OK (CONFIG_LUCI_LANG_zh_Hans=y)"
         else
-          echo "::warning::Argon 主题未被选中，将使用默认 bootstrap 主题"
+          echo "::error::中文语言开关(CONFIG_LUCI_LANG_zh_Hans)未被选中！终止构建"
+          echo "=== 当前 .config 中 zh / LUCI_LANG 相关行 ==="
+          grep -iE "zh_Hans|zh_Hant|LUCI_LANG|i18n" .config | head -20
+          exit 1
         fi
 
         # Step 5: 强制启用固件镜像生成
@@ -151,13 +159,15 @@ jobs:
         sed -i 's/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/CONFIG_TARGET_ROOTFS_SQUASHFS=y/' .config
         sed -i 's/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/CONFIG_TARGET_ROOTFS_INITRAMFS=y/' .config
         sed -i 's/# CONFIG_TARGET_IMAGES_GZIP is not set/CONFIG_TARGET_IMAGES_GZIP=y/' .config
-        # 强制锁定 Argon 主题（覆盖 defconfig 可能误取消的情况）
-        sed -i 's/^# CONFIG_PACKAGE_luci-theme-argon is not set/CONFIG_PACKAGE_luci-theme-argon=y/' .config
+        # 强制锁定中文语言开关、子包（覆盖 defconfig 可能误取消的情况）
+        sed -i 's/^# CONFIG_LUCI_LANG_zh_Hans is not set/CONFIG_LUCI_LANG_zh_Hans=y/' .config
+        sed -i 's/^# CONFIG_PACKAGE_luci-i18n-base-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y/' .config
+        sed -i 's/^# CONFIG_PACKAGE_luci-i18n-firewall-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-firewall-zh_Hans=y/' .config
         make defconfig
 
         # 最终确认关键包已启用
         echo "=== 最终配置确认 ==="
-        grep -E "CONFIG_PACKAGE_uhttpd|CONFIG_PACKAGE_luci-ssl|CONFIG_PACKAGE_luci-base|CONFIG_PACKAGE_luci-mod-admin|CONFIG_PACKAGE_luci-theme-argon|CONFIG_PACKAGE_rpcd|CONFIG_LUCI_LANG_zh_Hans" .config | head -15
+        grep -E "CONFIG_PACKAGE_uhttpd|CONFIG_PACKAGE_luci-ssl|CONFIG_PACKAGE_luci-base|CONFIG_PACKAGE_luci-mod-admin|CONFIG_PACKAGE_luci-i18n-base-zh_Hans|CONFIG_PACKAGE_rpcd|CONFIG_LUCI_LANG_zh_Hans" .config | head -15
         echo "--- rootfs 配置 ---"
         grep -E "TARGET_ROOTFS|TARGET_IMAGES" .config | head -5
 
@@ -272,7 +282,8 @@ jobs:
           - 刷机：通过 Breed 上传 `*-squashfs-sysupgrade.bin`
           - 默认管理地址：`192.168.12.1`
           - 用户名：`root`，密码：`pcy831121`
-          - 主题：Argon（蓝色现代化界面，本测试版单独验证主题兼容性）
-          - 应用商店：本测试版未包含（用于判断 Argon 主题能否单独启动）
+          - 主题：bootstrap（默认，本测试版仅验证中文语言包）
+          - 中文：包含（luci-i18n-base-zh + firewall-zh）
+          - 应用商店：本测试版未包含（隔离变量：仅测中文是否导致启动失败）
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
