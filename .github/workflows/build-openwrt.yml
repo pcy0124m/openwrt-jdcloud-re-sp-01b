@@ -46,11 +46,28 @@ jobs:
 
     - name: Inject custom files (uci-defaults)
       run: |
-        # 将仓库 files/ 目录注入 OpenWrt 源码树，编译时打入固件根文件系统
-        # 这里放置首次启动自动安装中文的 uci-defaults 脚本
-        mkdir -p openwrt/files
-        cp -r "$GITHUB_WORKSPACE/files/." openwrt/files/ 2>/dev/null || true
-        chmod +x openwrt/files/etc/uci-defaults/* 2>/dev/null || true
+        # 将首次启动自动安装中文的 uci-defaults 脚本写入 OpenWrt 源码树，
+        # 编译时打入固件根文件系统（/etc/uci-defaults/，首次启动自动执行一次）。
+        # 采用 heredoc 内联生成，自包含，不依赖仓库额外文件。
+        mkdir -p openwrt/files/etc/uci-defaults
+        cat > openwrt/files/etc/uci-defaults/99-install-zh-cn << 'UCIEOF'
+        #!/bin/sh
+        # 首次启动自动安装中文语言包并设为默认
+        # 背景：将中文「编译进固件」在 RE-SP-01B 上会导致启动失败(bootloop)，
+        #       故改为首次启动联网后在线安装，效果等同但底子为稳定版(Argon)。
+        (
+          for i in $(seq 1 30); do
+            apk update >/dev/null 2>&1 && break
+            sleep 4
+          done
+          apk add luci-i18n-base-zh-cn >/dev/null 2>&1
+          apk add luci-i18n-firewall-zh-cn >/dev/null 2>&1
+          uci set luci.main.lang=zh_cn
+          uci commit luci
+        ) &
+        exit 0
+        UCIEOF
+        chmod +x openwrt/files/etc/uci-defaults/99-install-zh-cn
         echo "=== 注入的自定义文件 ==="
         find openwrt/files -type f 2>/dev/null || echo "(无)"
 
