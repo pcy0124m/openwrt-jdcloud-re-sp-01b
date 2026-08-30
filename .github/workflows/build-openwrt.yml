@@ -50,6 +50,8 @@ jobs:
         # 关键修复：CI 直连 git.openwrt.org 不稳定导致 luci/packages feed
         # 静默更新失败 → 固件缺 LuCI 网页界面。改用 GitHub 官方镜像。
         sed -i 's#https://git.openwrt.org/feed/#https://github.com/openwrt/#g; s#https://git.openwrt.org/project/#https://github.com/openwrt/#g' feeds.conf.default
+        # 添加 iStore 应用商店源（linkease/istore，已适配 OpenWrt 25.12 / apk 架构）
+        echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         # 校验 luci feed 真正安装到位（luci-base 是 LuCI 核心，缺它即无管理界面）
@@ -130,6 +132,9 @@ jobs:
         CONFIG_LUCI_LANG_zh_Hans=y
         CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y
         CONFIG_PACKAGE_luci-i18n-firewall-zh_Hans=y
+        # === iStore 应用商店（适配 OpenWrt 25.12 / apk 架构）===
+        CONFIG_PACKAGE_luci-app-store=y
+        CONFIG_PACKAGE_luci-i18n-app-store-zh-cn=y
         EXTRAS
 
         # Step 4: 再次 defconfig 解析新增包的依赖
@@ -159,6 +164,13 @@ jobs:
           echo "Argon 主题 选中确认: OK"
         else
           echo "::warning::Argon 主题未被选中，将使用默认 bootstrap 主题"
+        fi
+
+        # iStore 应用商店 选中确认（适配 25.12 / apk）
+        if grep -qiE "^CONFIG_PACKAGE_luci-app-store=y" .config; then
+          echo "iStore 商店 选中确认: OK"
+        else
+          echo "::warning::luci-app-store 未被选中，商店将不可用（检查 istore feed 是否拉取成功）"
         fi
 
         # Step 5: 强制启用固件镜像生成
@@ -291,5 +303,6 @@ jobs:
           - 默认管理地址：`192.168.12.1`
           - 用户名：`root`，密码：`pcy831121`
           - 主题：Argon（蓝色现代化界面）
+          - 应用商店：iStore（适配 OpenWrt 25.12 / apk 架构）
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
