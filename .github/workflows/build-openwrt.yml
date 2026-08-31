@@ -52,6 +52,8 @@ jobs:
         mkdir -p openwrt/files/etc/uci-defaults
         cat > openwrt/files/etc/uci-defaults/99-install-zh-cn << 'UCIEOF'
         #!/bin/sh
+        # 首次启动设置 root 密码（无需联网，立即生效）
+        echo 'root:pcy831121' | chpasswd 2>/dev/null || passwd -d root 2>/dev/null
         # 首次启动自动安装中文语言包并设为默认
         # 背景：将中文「编译进固件」在 RE-SP-01B 上会导致启动失败(bootloop)，
         #       故改为首次启动联网后在线安装，效果等同但底子为稳定版(Argon)。
