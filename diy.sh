@@ -41,8 +41,8 @@ echo "[DEBUG] 再次确认: 搜索结果应为空"
 find target/linux -type f \( -iname "*uvc*ip209*" -o -iname "*ipassion*uvc*" -o -iname "*ir-rc*v*support*" \) 2>/dev/null && echo "[WARN] 还有残留!" || echo "[OK] 已全部清除"
 echo "--- 内核补丁清理完成 ---"
 
-# 修改默认 IP (可选，默认 192.168.1.1)
-# sed -i 's/192.168.1.1/192.168.100.1/g' package/base-files/files/bin/config_generate
+# 修改默认 IP 为 192.168.12.1（京东云一代专用管理网段）
+sed -i 's/192.168.1.1/192.168.12.1/g' package/base-files/files/bin/config_generate
 
 # 修改默认主机名
 sed -i 's/OpenWrt/JDCloud/g' package/base-files/files/bin/config_generate
